@@ -1,0 +1,16 @@
+node_modules/
+
+.env
+.env.*
+
+agent-sessions/
+
+googlesuper_tools.json
+github_tools.json
+tool_graph.json
+tool_graph.dot
+tool_graph.html
+
+*.log
+*.tsbuildinfo
+.DS_Store

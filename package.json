@@ -1,0 +1,18 @@
+{
+  "scripts": {
+    "fetch:tools": "bun run src/fetch-tools.ts",
+    "build:graph": "bun run src/build-graph.ts",
+    "build:graph:profile": "bun run src/build-graph.ts --profile",
+    "graph:stats": "bun run src/graph-stats.ts",
+    "view:graph": "powershell -NoProfile -Command \"Start-Process tool_graph.html\""
+  },
+  "dependencies": {
+    "@composio/core": "*",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.87",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.10",
+    "@types/bun": "^1.3.11"
+  }
+}
