@@ -828,9 +828,9 @@ function toExplorerHtml(graph: Graph): string {
         --blue: #3578e5;
       }
       * { box-sizing: border-box; }
-      html, body { height: 100%; margin: 0; background: var(--canvas); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-      #wrap { display: grid; grid-template-columns: 420px minmax(0, 1fr); height: 100%; }
-      #side { min-width: 0; background: var(--panel); border-right: 1px solid var(--line); display: grid; grid-template-rows: auto auto auto 1fr auto; }
+      html, body { height: 100%; margin: 0; overflow: hidden; background: var(--canvas); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+      #wrap { display: grid; grid-template-columns: 420px minmax(0, 1fr); height: 100vh; max-height: 100vh; overflow: hidden; }
+      #side { min-width: 0; min-height: 0; background: var(--panel); border-right: 1px solid var(--line); display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; height: 100vh; max-height: 100vh; overflow: hidden; }
       .section { padding: 18px 20px; border-bottom: 1px solid var(--line); }
       .title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
       h1 { margin: 0; font-size: 18px; line-height: 1.2; font-weight: 740; letter-spacing: 0; }
@@ -848,7 +848,7 @@ function toExplorerHtml(graph: Graph): string {
       button { height: 38px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); cursor: pointer; font-weight: 650; }
       button:hover { border-color: #aeb8c7; background: #fbfcfd; }
       .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      #toolList { overflow: auto; padding: 8px; }
+      #toolList { min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 8px; overscroll-behavior: contain; }
       .toolRow { width: 100%; height: auto; text-align: left; display: grid; grid-template-columns: 10px minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 9px 10px; border: 0; border-radius: 8px; background: transparent; font-weight: 520; }
       .toolRow:hover, .toolRow.active { background: var(--soft); }
       .toolName { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -856,11 +856,12 @@ function toExplorerHtml(graph: Graph): string {
       #selected { padding: 14px 20px; border-top: 1px solid var(--line); background: #fbfcfd; }
       #selectedTitle { font-weight: 740; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       #selectedMeta { margin-top: 5px; color: var(--muted); font-size: 12px; }
-      #main { position: relative; min-width: 0; }
+      #main { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
       canvas { width: 100%; height: 100%; display: block; background: var(--canvas); }
       #tooltip { position:absolute; pointer-events:none; display:none; max-width: 520px; padding: 9px 11px; background: rgba(255,255,255,.96); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 32px rgba(21,30,43,.18); }
       #tooltip .h { font-weight: 740; font-size: 13px; margin: 0 0 4px; }
       #tooltip .m { color: var(--muted); font-size: 12px; line-height: 1.35; }
+      #modeHint { position: absolute; right: 18px; top: 16px; height: 30px; display: inline-flex; align-items: center; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.86); color: var(--muted); font-size: 12px; }
     </style>
   </head>
   <body>
@@ -889,7 +890,7 @@ function toExplorerHtml(graph: Graph): string {
           <div>
             <label for="edgeMode">Edge mode</label>
             <select id="edgeMode">
-              <option value="focused">Focused</option>
+              <option value="focused">Neighborhood</option>
               <option value="filtered">Filtered</option>
               <option value="all">All</option>
               <option value="none">None</option>
@@ -910,6 +911,7 @@ function toExplorerHtml(graph: Graph): string {
       </aside>
       <main id="main">
         <canvas id="c"></canvas>
+        <div id="modeHint">Neighborhood view</div>
         <div id="tooltip">
           <div class="h" id="tt-h"></div>
           <div class="m" id="tt-m"></div>
@@ -932,6 +934,7 @@ function toExplorerHtml(graph: Graph): string {
       const toolList = document.getElementById("toolList");
       const selectedTitle = document.getElementById("selectedTitle");
       const selectedMeta = document.getElementById("selectedMeta");
+      const modeHint = document.getElementById("modeHint");
       const tooltip = document.getElementById("tooltip");
       const ttH = document.getElementById("tt-h");
       const ttM = document.getElementById("tt-m");
@@ -971,12 +974,44 @@ function toExplorerHtml(graph: Graph): string {
       let dragging = false;
       let dragStart = null;
       let needsDraw = true;
+      const maxFocusedSide = 28;
 
       function neighborhood(nodeId) {
         const set = new Set([nodeId]);
         for (const x of outAdj.get(nodeId) || []) set.add(x);
         for (const x of inAdj.get(nodeId) || []) set.add(x);
         return set;
+      }
+
+      function edgeRank(edge, otherId) {
+        return Number(edge.score || 0) * 1000 + (degree.get(otherId) || 0);
+      }
+
+      function focusedEdgeGroups() {
+        if (!selected) return { incoming: [], outgoing: [], incomingTotal: 0, outgoingTotal: 0 };
+        const minScore = Number(scoreMin.value || 0);
+        const incoming = [];
+        const outgoing = [];
+        for (const edge of edges) {
+          if (Number(edge.score || 0) < minScore) continue;
+          if (edge.to === selected.id) incoming.push(edge);
+          if (edge.from === selected.id) outgoing.push(edge);
+        }
+        incoming.sort((a, b) => edgeRank(b, b.from) - edgeRank(a, a.from));
+        outgoing.sort((a, b) => edgeRank(b, b.to) - edgeRank(a, a.to));
+        return {
+          incoming: incoming.slice(0, maxFocusedSide),
+          outgoing: outgoing.slice(0, maxFocusedSide),
+          incomingTotal: incoming.length,
+          outgoingTotal: outgoing.length,
+        };
+      }
+
+      function focusedEdgeKeySet(groups = focusedEdgeGroups()) {
+        const keys = new Set();
+        for (const edge of groups.incoming) keys.add(edge.from + "\\u0000" + edge.to + "\\u0000" + edge.label);
+        for (const edge of groups.outgoing) keys.add(edge.from + "\\u0000" + edge.to + "\\u0000" + edge.label);
+        return keys;
       }
 
       function computeRanks() {
@@ -1018,7 +1053,8 @@ function toExplorerHtml(graph: Graph): string {
         const incoming = (inAdj.get(selected.id) || []).length;
         const outgoing = (outAdj.get(selected.id) || []).length;
         selectedTitle.textContent = selected.label;
-        selectedMeta.textContent = selected.toolkit + " | incoming " + incoming + " | outgoing " + outgoing + " | degree " + (degree.get(selected.id) || 0);
+        const suffix = edgeMode.value === "focused" ? " | showing top " + maxFocusedSide + " each side" : "";
+        selectedMeta.textContent = selected.toolkit + " | incoming " + incoming + " | outgoing " + outgoing + " | degree " + (degree.get(selected.id) || 0) + suffix;
       }
 
       function renderToolList() {
@@ -1096,7 +1132,10 @@ function toExplorerHtml(graph: Graph): string {
         let set = new Set(nodes.filter((n) => !n.hidden).map((n) => n.id));
         const query = norm(q.value).trim();
         if (edgeMode.value === "focused" && selected) {
-          const focus = neighborhood(selected.id);
+          const groups = focusedEdgeGroups();
+          const focus = new Set([selected.id]);
+          for (const edge of groups.incoming) focus.add(edge.from);
+          for (const edge of groups.outgoing) focus.add(edge.to);
           set = new Set([...set].filter((id) => focus.has(id)));
         }
         if (edgeMode.value === "filtered" && !query) {
@@ -1108,11 +1147,21 @@ function toExplorerHtml(graph: Graph): string {
       function edgeIsVisible(e, set) {
         if (Number(e.score || 0) < Number(scoreMin.value || 0)) return false;
         if (edgeMode.value === "none") return false;
-        if (edgeMode.value === "focused") return selected && (e.from === selected.id || e.to === selected.id);
+        if (edgeMode.value === "focused") {
+          const keys = focusedEdgeKeySet();
+          return keys.has(e.from + "\\u0000" + e.to + "\\u0000" + e.label);
+        }
         return set.has(e.from) && set.has(e.to);
       }
 
       function fitView() {
+        if (edgeMode.value === "focused") {
+          scale = 1;
+          offsetX = 0;
+          offsetY = 0;
+          needsDraw = true;
+          return;
+        }
         const set = currentNodeSet();
         const visible = nodes.filter((n) => set.has(n.id));
         if (!visible.length) return;
@@ -1151,10 +1200,143 @@ function toExplorerHtml(graph: Graph): string {
         }
       }
 
+      function ellipsize(text, maxWidth) {
+        if (ctx.measureText(text).width <= maxWidth) return text;
+        let out = text;
+        while (out.length > 4 && ctx.measureText(out + "...").width > maxWidth) {
+          out = out.slice(0, -1);
+        }
+        return out + "...";
+      }
+
+      function drawToolCard(node, x, y, width, selectedCard = false) {
+        const height = selectedCard ? 54 : 38;
+        const isGitHub = node.toolkit.includes("github");
+        const color = isGitHub ? "#d99414" : "#159c75";
+        node.x = x;
+        node.y = y;
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = selectedCard ? "#171a1f" : "#cfd6e1";
+        ctx.lineWidth = selectedCard ? 1.8 : 1;
+        ctx.beginPath();
+        ctx.roundRect(x - width / 2, y - height / 2, width, height, 8);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.roundRect(x - width / 2 + 10, y - 5, 10, 10, 3);
+        ctx.fill();
+
+        ctx.fillStyle = "#171a1f";
+        ctx.font = selectedCard ? "700 13px ui-sans-serif, system-ui" : "600 12px ui-sans-serif, system-ui";
+        ctx.fillText(ellipsize(node.label, width - 42), x - width / 2 + 28, y - (selectedCard ? 7 : -4));
+        if (selectedCard) {
+          ctx.fillStyle = "#626a73";
+          ctx.font = "12px ui-sans-serif, system-ui";
+          ctx.fillText(node.toolkit + " | degree " + (degree.get(node.id) || 0), x - width / 2 + 28, y + 14);
+        }
+      }
+
+      function drawEdgeLabel(text, x, y) {
+        ctx.font = "11px ui-sans-serif, system-ui";
+        const label = ellipsize(text, 120);
+        const width = ctx.measureText(label).width + 12;
+        ctx.fillStyle = "rgba(255,255,255,.9)";
+        ctx.strokeStyle = "rgba(207,214,225,.9)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(x - width / 2, y - 10, width, 20, 6);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#626a73";
+        ctx.fillText(label, x - width / 2 + 6, y + 4);
+      }
+
+      function drawFocusedView(rect) {
+        const groups = focusedEdgeGroups();
+        const set = currentNodeSet();
+        const centerX = rect.width * 0.5;
+        const centerY = rect.height * 0.5;
+        const cardW = Math.min(260, Math.max(190, rect.width * 0.2));
+        const sideW = Math.min(280, Math.max(210, rect.width * 0.22));
+        const leftX = Math.max(sideW / 2 + 36, centerX - Math.min(420, rect.width * 0.28));
+        const rightX = Math.min(rect.width - sideW / 2 - 36, centerX + Math.min(420, rect.width * 0.28));
+        const top = 96;
+        const bottom = rect.height - 72;
+
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#d9dee7";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(28, 54, rect.width - 56, rect.height - 92, 12);
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "#626a73";
+        ctx.font = "700 12px ui-sans-serif, system-ui";
+        ctx.fillText("PROVIDES REQUIRED INPUTS", leftX - sideW / 2, 82);
+        ctx.fillText("SELECTED TOOL", centerX - cardW / 2, 82);
+        ctx.fillText("UNLOCKS DOWNSTREAM TOOLS", rightX - sideW / 2, 82);
+
+        drawToolCard(selected, centerX, centerY, cardW, true);
+
+        const placeSide = (edgesForSide, side) => {
+          const count = edgesForSide.length;
+          const gap = count <= 1 ? 0 : Math.min(48, (bottom - top) / (count - 1));
+          const startY = count <= 1 ? centerY : centerY - gap * (count - 1) / 2;
+          for (let i = 0; i < count; i++) {
+            const edge = edgesForSide[i];
+            const node = idToNode.get(side === "left" ? edge.from : edge.to);
+            if (!node || node.hidden || !set.has(node.id)) continue;
+            const x = side === "left" ? leftX : rightX;
+            const y = clamp(startY + i * gap, top, bottom);
+            drawToolCard(node, x, y, sideW, false);
+
+            ctx.strokeStyle = "rgba(53,120,229,.42)";
+            ctx.lineWidth = Math.max(1.1, Math.min(2.4, Number(edge.score || 0) / 35));
+            ctx.beginPath();
+            if (side === "left") {
+              ctx.moveTo(x + sideW / 2, y);
+              ctx.bezierCurveTo(x + sideW / 2 + 120, y, centerX - cardW / 2 - 120, centerY, centerX - cardW / 2, centerY);
+              ctx.stroke();
+              if (i < 10) drawEdgeLabel(edge.label, (x + centerX) / 2, (y + centerY) / 2 - 8);
+            } else {
+              ctx.moveTo(centerX + cardW / 2, centerY);
+              ctx.bezierCurveTo(centerX + cardW / 2 + 120, centerY, x - sideW / 2 - 120, y, x - sideW / 2, y);
+              ctx.stroke();
+              if (i < 10) drawEdgeLabel(edge.label, (x + centerX) / 2, (y + centerY) / 2 - 8);
+            }
+          }
+        };
+
+        placeSide(groups.incoming, "left");
+        placeSide(groups.outgoing, "right");
+
+        ctx.fillStyle = "#626a73";
+        ctx.font = "12px ui-sans-serif, system-ui";
+        if (groups.incomingTotal > groups.incoming.length) {
+          ctx.fillText("+" + (groups.incomingTotal - groups.incoming.length) + " more providers hidden by cap", leftX - sideW / 2, rect.height - 34);
+        }
+        if (groups.outgoingTotal > groups.outgoing.length) {
+          ctx.fillText("+" + (groups.outgoingTotal - groups.outgoing.length) + " more downstream tools hidden by cap", rightX - sideW / 2, rect.height - 34);
+        }
+
+        nodeCount.textContent = String(nodes.length);
+        edgeCount.textContent = String(edges.length);
+        visibleCount.textContent = String(set.size);
+        selectedMeta.textContent = selected.toolkit + " | incoming " + groups.incomingTotal + " | outgoing " + groups.outgoingTotal + " | visible " + (groups.incoming.length + groups.outgoing.length);
+      }
+
       function draw() {
         const rect = canvas.getBoundingClientRect();
         ctx.clearRect(0, 0, rect.width, rect.height);
         drawBackground(rect);
+        modeHint.textContent = edgeMode.value === "focused" ? "Neighborhood view" : "Global map";
+        if (edgeMode.value === "focused" && selected) {
+          drawFocusedView(rect);
+          return;
+        }
         const set = currentNodeSet();
 
         ctx.save();
@@ -1240,12 +1422,14 @@ function toExplorerHtml(graph: Graph): string {
 
       canvas.addEventListener("wheel", (ev) => {
         ev.preventDefault();
+        if (edgeMode.value === "focused") return;
         const factor = Math.sign(ev.deltaY) > 0 ? 0.9 : 1.1;
         scale = clamp(scale * factor, 0.15, 3.5);
         needsDraw = true;
       }, { passive: false });
 
       canvas.addEventListener("mousedown", (ev) => {
+        if (edgeMode.value === "focused") return;
         dragging = true;
         dragStart = { x: ev.clientX, y: ev.clientY, ox: offsetX, oy: offsetY };
       });
@@ -1260,8 +1444,8 @@ function toExplorerHtml(graph: Graph): string {
 
       canvas.addEventListener("click", (ev) => {
         const rect = canvas.getBoundingClientRect();
-        const mx = (ev.clientX - rect.left - offsetX) / scale;
-        const my = (ev.clientY - rect.top - offsetY) / scale;
+        const mx = edgeMode.value === "focused" ? ev.clientX - rect.left : (ev.clientX - rect.left - offsetX) / scale;
+        const my = edgeMode.value === "focused" ? ev.clientY - rect.top : (ev.clientY - rect.top - offsetY) / scale;
         const set = currentNodeSet();
         let hit = null;
         for (const n of nodes) {
@@ -1275,8 +1459,8 @@ function toExplorerHtml(graph: Graph): string {
 
       canvas.addEventListener("mousemove", (ev) => {
         const rect = canvas.getBoundingClientRect();
-        const mx = (ev.clientX - rect.left - offsetX) / scale;
-        const my = (ev.clientY - rect.top - offsetY) / scale;
+        const mx = edgeMode.value === "focused" ? ev.clientX - rect.left : (ev.clientX - rect.left - offsetX) / scale;
+        const my = edgeMode.value === "focused" ? ev.clientY - rect.top : (ev.clientY - rect.top - offsetY) / scale;
         const set = currentNodeSet();
         let hit = null;
         for (const n of nodes) {
@@ -1299,7 +1483,7 @@ function toExplorerHtml(graph: Graph): string {
       });
 
       q.addEventListener("input", applyFilter);
-      edgeMode.addEventListener("change", () => { updateSelectedPanel(); needsDraw = true; });
+      edgeMode.addEventListener("change", () => { updateSelectedPanel(); fitView(); needsDraw = true; });
       scoreMin.addEventListener("input", () => { scoreLabel.textContent = scoreMin.value; needsDraw = true; });
       btnRestart.addEventListener("click", () => { restartLayout(); fitView(); });
       btnFit.addEventListener("click", fitView);
@@ -1432,6 +1616,72 @@ async function main() {
   const progressEvery = 50;
   let totalCandidatesConsidered = 0;
   let maxCandidatesForAnyParam = 0;
+  let candidateCacheHits = 0;
+  let candidateCacheMisses = 0;
+  let scoreCacheHits = 0;
+  let scoreCacheMisses = 0;
+  const baseCandidateCache = new Map<string, string[]>();
+  const staticScoreCache = new Map<string, number>();
+
+  const getBaseCandidatesForParam = (paramN: string) => {
+    const cached = baseCandidateCache.get(paramN);
+    if (cached) {
+      candidateCacheHits++;
+      return cached;
+    }
+
+    candidateCacheMisses++;
+    const candidates = new Set<string>();
+    const directCandidates = tokenToProviders.get(paramN);
+    if (directCandidates) for (const id of directCandidates) candidates.add(id);
+
+    if (paramN.endsWith("_id")) {
+      const base = paramN.slice(0, -3);
+      const baseCandidates = tokenToProviders.get(base);
+      if (baseCandidates) for (const id of baseCandidates) candidates.add(id);
+      const baseIdCandidates = tokenToProviders.get(`${base}_id`);
+      if (baseIdCandidates) {
+        for (const id of baseIdCandidates) candidates.add(id);
+      }
+    }
+
+    if (candidates.size === 0) {
+      for (const id of fetcherProviderIds.slice(0, 200)) candidates.add(id);
+    }
+
+    const result = Array.from(candidates);
+    baseCandidateCache.set(paramN, result);
+    return result;
+  };
+
+  const getStaticProviderParamScore = (
+    providerId: string,
+    meta: NonNullable<(typeof providerMeta extends Map<string, infer V> ? V : never)>,
+    paramN: string
+  ) => {
+    const cacheKey = `${providerId}\u0000${paramN}`;
+    const cached = staticScoreCache.get(cacheKey);
+    if (cached !== undefined) {
+      scoreCacheHits++;
+      return cached;
+    }
+
+    scoreCacheMisses++;
+    let score = 0;
+    if (meta.isFetcher) score += 2;
+    if (meta.tokens.has(paramN)) score += 6;
+    if (meta.descNorm.includes(paramN)) score += 3;
+    if (meta.nameNorm.includes(paramN)) score += 3;
+    if (paramN.endsWith("_id")) {
+      const base = paramN.slice(0, -3);
+      if (base && meta.tokens.has(base)) score += 3;
+      if (base && meta.descNorm.includes(base)) score += 2;
+      if (base && meta.nameNorm.includes(base)) score += 2;
+    }
+
+    staticScoreCache.set(cacheKey, score);
+    return score;
+  };
 
   for (const consumerNode of nodes) {
     const consumerTool = toolByNodeId.get(consumerNode.id);
@@ -1447,7 +1697,7 @@ async function main() {
       // 1) Explicit “call X.Y method” hints => match provider slug tokens.
       // 2) Providers that "provide" param token (from output schema, name, etc.)
       // 3) For *_id, also consider base token.
-      let candidateSet = new Set<string>();
+      let candidateSet = new Set<string>(getBaseCandidatesForParam(paramN));
 
       const paramDesc = extractParamDescription(consumerTool, param);
       const hints = extractExplicitMethodHints(paramDesc);
@@ -1467,24 +1717,6 @@ async function main() {
             if (meta && meta.slugUpper.includes(needle)) candidateSet.add(id);
           }
         }
-      }
-
-      const directCandidates = tokenToProviders.get(paramN);
-      if (directCandidates) for (const id of directCandidates) candidateSet.add(id);
-
-      if (paramN.endsWith("_id")) {
-        const base = paramN.slice(0, -3);
-        const baseCandidates = tokenToProviders.get(base);
-        if (baseCandidates) for (const id of baseCandidates) candidateSet.add(id);
-        const baseIdCandidates = tokenToProviders.get(`${base}_id`);
-        if (baseIdCandidates)
-          for (const id of baseIdCandidates) candidateSet.add(id);
-      }
-
-      // Fallback: if we still have no candidates, try a small sample of fetchers
-      // so we don't miss obvious list/search tools, but avoid O(n^2).
-      if (candidateSet.size === 0) {
-        for (const id of fetcherProviderIds.slice(0, 200)) candidateSet.add(id);
       }
 
       if (candidateSet.size > 250) {
@@ -1519,20 +1751,10 @@ async function main() {
       for (const providerId of candidateSet) {
         const meta = providerMeta.get(providerId);
         if (!meta) continue;
-        let score = 0;
+        let score = getStaticProviderParamScore(providerId, meta, paramN);
         for (const h of hints) {
           const hTok = normalizeToken(h).toUpperCase();
           if (meta.slugUpper.includes(hTok)) score += 80;
-        }
-        if (meta.isFetcher) score += 2;
-        if (meta.tokens.has(paramN)) score += 6;
-        if (meta.descNorm.includes(paramN)) score += 3;
-        if (meta.nameNorm.includes(paramN)) score += 3;
-        if (paramN.endsWith("_id")) {
-          const base = paramN.slice(0, -3);
-          if (base && meta.tokens.has(base)) score += 3;
-          if (base && meta.descNorm.includes(base)) score += 2;
-          if (base && meta.nameNorm.includes(base)) score += 2;
         }
         if (meta.slugUpper === consumerNameUpper) score -= 100;
         if (score >= minScore) scored.push({ id: providerId, score });
@@ -1615,6 +1837,8 @@ async function main() {
     console.log(`phases: load=${formatMs(loadedMs)} index=${formatMs(indexMs)} infer=${formatMs(inferMs)} writeJson=${formatMs(writeJsonMs)} writeDot=${formatMs(writeDotMs)} writeHtml=${formatMs(writeHtmlMs)}`);
     console.log(`requiredParams=${totalRequiredParams} providers=${nodes.length}`);
     console.log(`candidates: avgPerParam=${avgCandidates.toFixed(1)} maxPerParam=${maxCandidatesForAnyParam}`);
+    console.log(`candidateCache: hits=${candidateCacheHits} misses=${candidateCacheMisses} uniqueParams=${baseCandidateCache.size}`);
+    console.log(`scoreCache: hits=${scoreCacheHits} misses=${scoreCacheMisses} entries=${staticScoreCache.size}`);
     console.log(`edges=${graph.edges.length}`);
   }
 }

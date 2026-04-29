@@ -68,3 +68,7 @@ See `PERFORMANCE.md` for why naive edge inference becomes `O(N^2)` and how this 
 ## submission notes
 
 See `SUBMISSION_NOTES.md` for a concise summary of what was implemented and improved.
+
+## reviewer guide
+
+See `REVIEWER_GUIDE.md` for the end-to-end explanation, commands, graph semantics, visualization notes, and performance summary.
